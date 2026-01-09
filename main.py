@@ -154,7 +154,7 @@ async def render_video(
         # Escape paths for FFmpeg
         srt_escaped = str(srt_path).replace("\\", "/").replace(":", "\\:")
         
-        # FFmpeg command
+        # FFmpeg command - strip metadata to prevent filename overlay
         cmd = [
             "ffmpeg",
             "-y",
@@ -165,6 +165,8 @@ async def render_video(
             "-crf", "23",
             "-c:a", "aac",
             "-b:a", "128k",
+            "-map_metadata", "-1",  # Strip all metadata
+            "-metadata", "title=",  # Clear title
             str(output_path)
         ]
         
