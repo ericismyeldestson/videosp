@@ -171,6 +171,7 @@ async def render_video(
         ]
         
         print(f"[Job {job_id}] Running FFmpeg...")
+        print(f"[Job {job_id}] Command: {' '.join(cmd)}")
         
         # Run FFmpeg
         result = subprocess.run(
@@ -180,13 +181,21 @@ async def render_video(
             timeout=600  # 10 minutes timeout
         )
         
+        # Log FFmpeg output regardless of result
+        print(f"[Job {job_id}] FFmpeg return code: {result.returncode}")
+        if result.stdout:
+            print(f"[Job {job_id}] FFmpeg stdout: {result.stdout[:500]}")
+        if result.stderr:
+            print(f"[Job {job_id}] FFmpeg stderr (last 1000 chars): {result.stderr[-1000:]}")
+        
         if result.returncode != 0:
-            print(f"[Job {job_id}] FFmpeg Error: {result.stderr}")
+            print(f"[Job {job_id}] FFmpeg FAILED with code {result.returncode}")
             # Clean up on error
             cleanup_job_dir(job_dir)
             raise HTTPException(status_code=500, detail=f"FFmpeg error: {result.stderr[-500:]}")
         
         if not output_path.exists():
+            print(f"[Job {job_id}] Output file not found at: {output_path}")
             cleanup_job_dir(job_dir)
             raise HTTPException(status_code=500, detail="Output file not created")
         
