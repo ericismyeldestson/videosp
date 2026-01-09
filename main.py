@@ -151,35 +151,43 @@ async def render_video(
             f"Bold=1"
         )
         
-        # Escape paths for FFmpeg
+        # Escape paths for FFmpeg - no shell quotes needed with subprocess list mode
         srt_escaped = str(srt_path).replace("\\", "/").replace(":", "\\:")
+        
+        # Build -vf filter without shell quotes (subprocess handles word splitting)
+        vf_filter = f"subtitles={srt_escaped}:force_style={force_style}"
         
         # FFmpeg command - strip metadata to prevent filename overlay
         cmd = [
             "ffmpeg",
             "-y",
             "-i", str(video_path),
-            "-vf", f"subtitles='{srt_escaped}':force_style='{force_style}'",
+            "-vf", vf_filter,
             "-c:v", "libx264",
             "-preset", "fast",
             "-crf", "23",
             "-c:a", "aac",
             "-b:a", "128k",
-            "-map_metadata", "-1",  # Strip all metadata
-            "-metadata", "title=",  # Clear title
+            "-map_metadata", "-1",
+            "-metadata", "title=",
             str(output_path)
         ]
         
         print(f"[Job {job_id}] Running FFmpeg...")
         print(f"[Job {job_id}] Command: {' '.join(cmd)}")
         
-        # Run FFmpeg
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=600  # 10 minutes timeout
-        )
+        # Run FFmpeg with exception handling
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600
+            )
+        except Exception as subprocess_error:
+            print(f"[Job {job_id}] subprocess.run exception: {subprocess_error}")
+            cleanup_job_dir(job_dir)
+            raise HTTPException(status_code=500, detail=f"FFmpeg subprocess error: {str(subprocess_error)}")
         
         # Log FFmpeg output regardless of result
         print(f"[Job {job_id}] FFmpeg return code: {result.returncode}")
