@@ -1,10 +1,14 @@
-# Use Python slim image with FFmpeg
+# Use Python slim image with FFmpeg and Chinese fonts
 FROM python:3.11-slim
 
-# Install FFmpeg
+# Install FFmpeg and Chinese fonts
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+    fonts-noto-cjk \
+    fonts-wqy-zenhei \
+    fontconfig \
+    && rm -rf /var/lib/apt/lists/* \
+    && fc-cache -fv
 
 # Set working directory
 WORKDIR /app
