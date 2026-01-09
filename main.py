@@ -139,23 +139,25 @@ async def render_video(
         output_path = job_dir / "output.mp4"
         
         # Build force_style string - use Noto Sans CJK for Chinese support
+        # Replace spaces with escaped spaces for FFmpeg filter parsing
         actual_font = "Noto Sans CJK SC" if "Source Han" in font_name or "Noto" in font_name else font_name
+        actual_font_escaped = actual_font.replace(" ", "\\ ")  # Escape spaces
         
         force_style = (
             f"FontSize={font_size},"
             f"MarginV={margin_v},"
-            f"FontName={actual_font},"
+            f"FontName={actual_font_escaped},"
             f"PrimaryColour=&H00FFFFFF,"
             f"OutlineColour=&H00000000,"
             f"Outline=2,"
             f"Bold=1"
         )
         
-        # Escape paths for FFmpeg - no shell quotes needed with subprocess list mode
+        # Escape paths for FFmpeg
         srt_escaped = str(srt_path).replace("\\", "/").replace(":", "\\:")
         
-        # Build -vf filter without shell quotes (subprocess handles word splitting)
-        vf_filter = f"subtitles={srt_escaped}:force_style={force_style}"
+        # Build -vf filter - wrap force_style in single quotes to handle special chars
+        vf_filter = f"subtitles={srt_escaped}:force_style='{force_style}'"
         
         # FFmpeg command - strip all metadata and data streams to prevent filename overlay
         cmd = [
