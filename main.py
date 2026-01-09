@@ -157,19 +157,24 @@ async def render_video(
         # Build -vf filter without shell quotes (subprocess handles word splitting)
         vf_filter = f"subtitles={srt_escaped}:force_style={force_style}"
         
-        # FFmpeg command - strip metadata to prevent filename overlay
+        # FFmpeg command - strip all metadata and data streams to prevent filename overlay
         cmd = [
             "ffmpeg",
             "-y",
             "-i", str(video_path),
+            "-map", "0:v:0",          # Only first video stream
+            "-map", "0:a:0?",         # Only first audio stream (optional)
             "-vf", vf_filter,
             "-c:v", "libx264",
             "-preset", "fast",
             "-crf", "23",
             "-c:a", "aac",
             "-b:a", "128k",
-            "-map_metadata", "-1",
-            "-metadata", "title=",
+            "-dn",                    # Disable data streams (may contain text overlays)
+            "-map_metadata", "-1",    # Strip all metadata
+            "-metadata", "title=",    # Clear title
+            "-metadata", "comment=",  # Clear comment
+            "-metadata", "description=",  # Clear description
             str(output_path)
         ]
         
