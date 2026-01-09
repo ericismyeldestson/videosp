@@ -8,9 +8,10 @@ import uuid
 import subprocess
 import tempfile
 import shutil
+import asyncio
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -37,9 +38,34 @@ class SubtitleStyle(BaseModel):
     font_name: str = "Arial"
 
 
+def cleanup_job_dir(job_dir: Path):
+    """Clean up job directory after response is sent."""
+    try:
+        if job_dir.exists():
+            shutil.rmtree(job_dir)
+            print(f"[Cleanup] Deleted job directory: {job_dir}")
+    except Exception as e:
+        print(f"[Cleanup] Error deleting {job_dir}: {e}")
+
+
+def get_storage_usage():
+    """Get current storage usage in MB."""
+    total_size = 0
+    if TEMP_DIR.exists():
+        for f in TEMP_DIR.rglob("*"):
+            if f.is_file():
+                total_size += f.stat().st_size
+    return total_size / (1024 * 1024)  # Convert to MB
+
+
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "Video Subtitle Generator API"}
+    storage_mb = get_storage_usage()
+    return {
+        "status": "ok", 
+        "service": "Video Subtitle Generator API",
+        "temp_storage_mb": round(storage_mb, 2)
+    }
 
 
 @app.get("/health")
@@ -47,8 +73,38 @@ async def health():
     return {"status": "healthy"}
 
 
+@app.get("/storage")
+async def storage_info():
+    """Get storage usage information."""
+    storage_mb = get_storage_usage()
+    job_count = len(list(TEMP_DIR.iterdir())) if TEMP_DIR.exists() else 0
+    return {
+        "temp_storage_mb": round(storage_mb, 2),
+        "job_directories": job_count,
+        "temp_dir": str(TEMP_DIR)
+    }
+
+
+@app.delete("/cleanup")
+async def manual_cleanup():
+    """Manually clean up all temporary files."""
+    try:
+        if TEMP_DIR.exists():
+            before_mb = get_storage_usage()
+            shutil.rmtree(TEMP_DIR)
+            TEMP_DIR.mkdir(exist_ok=True)
+            return {
+                "status": "cleaned",
+                "freed_mb": round(before_mb, 2)
+            }
+        return {"status": "already_empty"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/render")
 async def render_video(
+    background_tasks: BackgroundTasks,
     video: UploadFile = File(...),
     srt_content: str = Form(...),
     font_size: int = Form(24),
@@ -59,6 +115,7 @@ async def render_video(
     Render video with burned-in subtitles.
     Accepts video file upload and SRT content.
     Returns processed video file.
+    Files are automatically cleaned up after response.
     """
     job_id = str(uuid.uuid4())[:8]
     job_dir = TEMP_DIR / job_id
@@ -71,6 +128,8 @@ async def render_video(
             content = await video.read()
             f.write(content)
         
+        print(f"[Job {job_id}] Received video: {len(content) / (1024*1024):.2f} MB")
+        
         # Save SRT file
         srt_path = job_dir / "subtitles.srt"
         with open(srt_path, "w", encoding="utf-8") as f:
@@ -79,11 +138,13 @@ async def render_video(
         # Output path
         output_path = job_dir / "output.mp4"
         
-        # Build force_style string
+        # Build force_style string - use Noto Sans CJK for Chinese support
+        actual_font = "Noto Sans CJK SC" if "Source Han" in font_name or "Noto" in font_name else font_name
+        
         force_style = (
             f"FontSize={font_size},"
             f"MarginV={margin_v},"
-            f"FontName={font_name},"
+            f"FontName={actual_font},"
             f"PrimaryColour=&H00FFFFFF,"
             f"OutlineColour=&H00000000,"
             f"Outline=2,"
@@ -107,7 +168,7 @@ async def render_video(
             str(output_path)
         ]
         
-        print(f"[FFmpeg] Running: {' '.join(cmd)}")
+        print(f"[Job {job_id}] Running FFmpeg...")
         
         # Run FFmpeg
         result = subprocess.run(
@@ -118,28 +179,37 @@ async def render_video(
         )
         
         if result.returncode != 0:
-            print(f"[FFmpeg] Error: {result.stderr}")
+            print(f"[Job {job_id}] FFmpeg Error: {result.stderr}")
+            # Clean up on error
+            cleanup_job_dir(job_dir)
             raise HTTPException(status_code=500, detail=f"FFmpeg error: {result.stderr[-500:]}")
         
         if not output_path.exists():
+            cleanup_job_dir(job_dir)
             raise HTTPException(status_code=500, detail="Output file not created")
+        
+        output_size = output_path.stat().st_size / (1024*1024)
+        print(f"[Job {job_id}] Output ready: {output_size:.2f} MB")
+        
+        # Schedule cleanup after response is sent
+        background_tasks.add_task(cleanup_job_dir, job_dir)
         
         # Return the processed video
         return FileResponse(
             str(output_path),
             media_type="video/mp4",
-            filename=f"subtitled_{job_id}.mp4",
-            background=None  # Will clean up after
+            filename=f"subtitled_{job_id}.mp4"
         )
         
     except subprocess.TimeoutExpired:
+        cleanup_job_dir(job_dir)
         raise HTTPException(status_code=500, detail="Processing timeout")
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"[Error] {e}")
+        print(f"[Job {job_id}] Error: {e}")
+        cleanup_job_dir(job_dir)
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        # Cleanup will happen after response is sent
-        pass
 
 
 @app.on_event("startup")
@@ -151,6 +221,10 @@ async def startup():
         print(f"[INFO] FFmpeg available: {result.stdout.split(chr(10))[0]}")
     except Exception as e:
         print(f"[WARNING] FFmpeg not found: {e}")
+    
+    # Report storage usage
+    storage_mb = get_storage_usage()
+    print(f"[INFO] Current temp storage: {storage_mb:.2f} MB")
 
 
 if __name__ == "__main__":
