@@ -16,7 +16,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY main_cloud.py ./main.py
+COPY main.py .
 
 # Expose port (Render uses PORT env variable)
 EXPOSE 10000
